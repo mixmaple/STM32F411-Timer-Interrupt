@@ -1,93 +1,78 @@
-#include <stdint.h>
+#include "stm32f4xx.h"
 
-// --- Definisi Alamat Register (STM32F411 Reference Manual) ---
-#define RCC_BASE        0x40023800UL
-#define RCC_AHB1ENR     (*(volatile uint32_t *)(RCC_BASE + 0x30UL))
-#define RCC_APB1ENR     (*(volatile uint32_t *)(RCC_BASE + 0x40UL))
-
-#define GPIOA_BASE      0x40020000UL
-#define GPIOA_MODER     (*(volatile uint32_t *)(GPIOA_BASE + 0x00UL))
-#define GPIOA_ODR       (*(volatile uint32_t *)(GPIOA_BASE + 0x14UL))
-
-#define TIM2_BASE       0x40000000UL
-#define TIM2_CR1        (*(volatile uint32_t *)(TIM2_BASE + 0x00UL))
-#define TIM2_DIER       (*(volatile uint32_t *)(TIM2_BASE + 0x0CUL))
-#define TIM2_SR         (*(volatile uint32_t *)(TIM2_BASE + 0x10UL))
-#define TIM2_PSC        (*(volatile uint32_t *)(TIM2_BASE + 0x28UL))
-#define TIM2_ARR        (*(volatile uint32_t *)(TIM2_BASE + 0x2CUL))
-
-#define TIM3_BASE       0x40000400UL
-#define TIM3_CR1        (*(volatile uint32_t *)(TIM3_BASE + 0x00UL))
-#define TIM3_DIER       (*(volatile uint32_t *)(TIM3_BASE + 0x0CUL))
-#define TIM3_SR         (*(volatile uint32_t *)(TIM3_BASE + 0x10UL))
-#define TIM3_PSC        (*(volatile uint32_t *)(TIM3_BASE + 0x28UL))
-#define TIM3_ARR        (*(volatile uint32_t *)(TIM3_BASE + 0x2CUL))
-
-#define TIM4_BASE       0x40000800UL
-#define TIM4_CR1        (*(volatile uint32_t *)(TIM4_BASE + 0x00UL))
-#define TIM4_DIER       (*(volatile uint32_t *)(TIM4_BASE + 0x0CUL))
-#define TIM4_SR         (*(volatile uint32_t *)(TIM4_BASE + 0x10UL))
-#define TIM4_PSC        (*(volatile uint32_t *)(TIM4_BASE + 0x28UL))
-#define TIM4_ARR        (*(volatile uint32_t *)(TIM4_BASE + 0x2CUL))
-
-#define NVIC_ISER0      (*(volatile uint32_t *)0xE000E100UL)
-
-// Dipanggil oleh startup_stm32f411ceux.s sebelum main()
-void SystemInit(void) {}
+void GPIO_Init(void);
+void TIM2_Init(void);
+void TIM3_Init(void);
+void TIM4_Init(void);
 
 int main(void) {
-    // 1. Aktifkan clock GPIOA (bit 0)
-    RCC_AHB1ENR |= (1U << 0);
-
-    // 2. Set PA3, PA4, PA5 sebagai Output (01)
-    GPIOA_MODER &= ~((3U << (3 * 2)) | (3U << (4 * 2)) | (3U << (5 * 2)));
-    GPIOA_MODER |=  ((1U << (3 * 2)) | (1U << (4 * 2)) | (1U << (5 * 2)));
-
-    // 3. Aktifkan clock TIM2 (bit 0), TIM3 (bit 1), TIM4 (bit 2)
-    RCC_APB1ENR |= (1U << 0) | (1U << 1) | (1U << 2);
-
-    // Konfigurasi TIM2 -> Blink 1 Hz (Toggle tiap 500 ms)
-    TIM2_PSC   = 15999;
-    TIM2_ARR   = 499;
-    TIM2_DIER |= (1U << 0);       // UIE
-    TIM2_CR1  |= (1U << 0);       // CEN
-
-    // Konfigurasi TIM3 -> Blink 2 Hz (Toggle tiap 250 ms)
-    TIM3_PSC   = 15999;
-    TIM3_ARR   = 249;
-    TIM3_DIER |= (1U << 0);
-    TIM3_CR1  |= (1U << 0);
-
-    // Konfigurasi TIM4 -> Blink 5 Hz (Toggle tiap 100 ms)
-    TIM4_PSC   = 15999;
-    TIM4_ARR   = 99;
-    TIM4_DIER |= (1U << 0);
-    TIM4_CR1  |= (1U << 0);
-
-    // 4. Aktifkan IRQ TIM2 (28), TIM3 (29), TIM4 (30) di NVIC
-    NVIC_ISER0 |= (1U << 28) | (1U << 29) | (1U << 30);
+    GPIO_Init();
+    TIM2_Init();
+    TIM3_Init();
+    TIM4_Init();
 
     while (1) {
+        // kosong, semua kedipan udah di-handle sama interrupt timer
     }
 }
 
+void GPIO_Init(void) {
+    // nyalain clock GPIOA
+    RCC->AHB1ENR |= RCC_AHB1ENR_GPIOAEN;
+
+    // set pin PA3, PA4, PA5 jadi output
+    GPIOA->MODER &= ~((3U << (3 * 2)) | (3U << (4 * 2)) | (3U << (5 * 2)));
+    GPIOA->MODER |=  ((1U << (3 * 2)) | (1U << (4 * 2)) | (1U << (5 * 2)));
+}
+
+void TIM2_Init(void) {
+    RCC->APB1ENR |= RCC_APB1ENR_TIM2EN;   // nyalain clock TIM2
+    TIM2->PSC   = 15999;                  // 16 MHz / 16000 = 1 kHz (1 tick = 1 ms)
+    TIM2->ARR   = 499;                    // toggle tiap 500 ms -> kedip 1 Hz
+    TIM2->DIER |= TIM_DIER_UIE;           // enable update interrupt
+    TIM2->CR1  |= TIM_CR1_CEN;            // mulai timer
+    NVIC_EnableIRQ(TIM2_IRQn);            // aktifin interrupt TIM2 di NVIC
+}
+
+void TIM3_Init(void) {
+    RCC->APB1ENR |= RCC_APB1ENR_TIM3EN;   // nyalain clock TIM3
+    TIM3->PSC   = 15999;                  // 1 kHz (1 tick = 1 ms)
+    TIM3->ARR   = 249;                    // toggle tiap 250 ms -> kedip 2 Hz
+    TIM3->DIER |= TIM_DIER_UIE;
+    TIM3->CR1  |= TIM_CR1_CEN;
+    NVIC_EnableIRQ(TIM3_IRQn);
+}
+
+void TIM4_Init(void) {
+    RCC->APB1ENR |= RCC_APB1ENR_TIM4EN;   // nyalain clock TIM4
+    TIM4->PSC   = 15999;                  // 1 kHz (1 tick = 1 ms)
+    TIM4->ARR   = 99;                     // toggle tiap 100 ms -> kedip 5 Hz
+    TIM4->DIER |= TIM_DIER_UIE;
+    TIM4->CR1  |= TIM_CR1_CEN;
+    NVIC_EnableIRQ(TIM4_IRQn);
+}
+
+// --- Interrupt Handlers ---
 void TIM2_IRQHandler(void) {
-    if (TIM2_SR & (1U << 0)) {
-        TIM2_SR &= ~(1U << 0);
-        GPIOA_ODR ^= (1U << 3);   // Toggle PA3
+    if (TIM2->SR & TIM_SR_UIF) {
+        TIM2->SR   = ~TIM_SR_UIF;         // clear flag interrupt
+        GPIOA->ODR ^= (1U << 3);          // toggle LED PA3
+        (void)TIM2->SR;
     }
 }
 
 void TIM3_IRQHandler(void) {
-    if (TIM3_SR & (1U << 0)) {
-        TIM3_SR &= ~(1U << 0);
-        GPIOA_ODR ^= (1U << 4);   // Toggle PA4
+    if (TIM3->SR & TIM_SR_UIF) {
+        TIM3->SR   = ~TIM_SR_UIF;
+        GPIOA->ODR ^= (1U << 4);          // toggle LED PA4
+        (void)TIM3->SR;
     }
 }
 
 void TIM4_IRQHandler(void) {
-    if (TIM4_SR & (1U << 0)) {
-        TIM4_SR &= ~(1U << 0);
-        GPIOA_ODR ^= (1U << 5);   // Toggle PA5
+    if (TIM4->SR & TIM_SR_UIF) {
+        TIM4->SR   = ~TIM_SR_UIF;
+        GPIOA->ODR ^= (1U << 5);          // toggle LED PA5
+        (void)TIM4->SR;
     }
 }
