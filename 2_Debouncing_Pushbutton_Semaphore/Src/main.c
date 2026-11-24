@@ -1,98 +1,78 @@
-#include <stdint.h>
+#include "stm32f4xx.h"
 
-// --- Definisi Alamat Register STM32F411 ---
-#define RCC_BASE        0x40023800UL
-#define RCC_AHB1ENR     (*(volatile uint32_t *)(RCC_BASE + 0x30UL))
-#define RCC_APB1ENR     (*(volatile uint32_t *)(RCC_BASE + 0x40UL))
-#define RCC_APB2ENR     (*(volatile uint32_t *)(RCC_BASE + 0x44UL))
+// flag semaphore buat ngasih sinyal dari ISR ke main loop
+volatile uint8_t btn_semaphore = 0;
 
-#define GPIOA_BASE      0x40020000UL
-#define GPIOA_MODER     (*(volatile uint32_t *)(GPIOA_BASE + 0x00UL))
-#define GPIOA_PUPDR     (*(volatile uint32_t *)(GPIOA_BASE + 0x0CUL))
-#define GPIOA_IDR       (*(volatile uint32_t *)(GPIOA_BASE + 0x10UL))
-#define GPIOA_ODR       (*(volatile uint32_t *)(GPIOA_BASE + 0x14UL))
-
-#define SYSCFG_BASE     0x40013800UL
-#define SYSCFG_EXTICR1  (*(volatile uint32_t *)(SYSCFG_BASE + 0x08UL))
-
-#define EXTI_BASE       0x40013C00UL
-#define EXTI_IMR        (*(volatile uint32_t *)(EXTI_BASE + 0x00UL))
-#define EXTI_RTSR       (*(volatile uint32_t *)(EXTI_BASE + 0x08UL))
-#define EXTI_FTSR       (*(volatile uint32_t *)(EXTI_BASE + 0x0CUL))
-#define EXTI_PR         (*(volatile uint32_t *)(EXTI_BASE + 0x14UL))
-
-#define TIM2_BASE       0x40000000UL
-#define TIM2_CR1        (*(volatile uint32_t *)(TIM2_BASE + 0x00UL))
-#define TIM2_DIER       (*(volatile uint32_t *)(TIM2_BASE + 0x0CUL))
-#define TIM2_SR         (*(volatile uint32_t *)(TIM2_BASE + 0x10UL))
-#define TIM2_CNT        (*(volatile uint32_t *)(TIM2_BASE + 0x24UL))
-#define TIM2_PSC        (*(volatile uint32_t *)(TIM2_BASE + 0x28UL))
-#define TIM2_ARR        (*(volatile uint32_t *)(TIM2_BASE + 0x2CUL))
-
-#define NVIC_ISER0      (*(volatile uint32_t *)0xE000E100UL)
-
-void SystemInit(void) {}
+void GPIO_EXTI_Init(void);
+void TIM2_Debounce_Init(void);
 
 int main(void) {
-    // 1. Aktifkan clock GPIOA, TIM2, dan SYSCFG
-    RCC_AHB1ENR |= (1U << 0);
-    RCC_APB1ENR |= (1U << 0);
-    RCC_APB2ENR |= (1U << 14);
-
-    // 2. Konfigurasi PA3 sebagai Output (LED)
-    GPIOA_MODER &= ~(3U << (3 * 2));
-    GPIOA_MODER |=  (1U << (3 * 2));
-    GPIOA_ODR   &= ~(1U << 3);          // Kondisi awal LED mati
-
-    // 3. Konfigurasi PA1 sebagai Input dengan Pull-Up
-    GPIOA_MODER &= ~(3U << (1 * 2));
-    GPIOA_PUPDR &= ~(3U << (1 * 2));
-    GPIOA_PUPDR |=  (1U << (1 * 2));
-
-    // 4. Hubungkan EXTI1 ke PA1, trigger Falling Edge (ditekan) & Rising Edge (dilepas)
-    SYSCFG_EXTICR1 &= ~(0xFU << 4);
-    EXTI_IMR       |=  (1U << 1);
-    EXTI_FTSR      |=  (1U << 1);
-    EXTI_RTSR      |=  (1U << 1);
-
-    // 5. Konfigurasi TIM2 untuk kedip saat tombol ditahan (toggle tiap 200 ms)
-    TIM2_PSC   = 15999;
-    TIM2_ARR   = 199;
-    TIM2_DIER |= (1U << 0);
-
-    // 6. Aktifkan EXTI1 (IRQ 7) dan TIM2 (IRQ 28) di NVIC
-    NVIC_ISER0 |= (1U << 7) | (1U << 28);
+    GPIO_EXTI_Init();
+    TIM2_Debounce_Init();
 
     while (1) {
+        // cek flag semaphore tanpa nge-block loop utama
+        if (btn_semaphore == 1) {
+            btn_semaphore = 0;            // reset flag
+            GPIOA->ODR ^= (1U << 3);      // toggle LED PA3
+        }
     }
 }
 
-void EXTI1_IRQHandler(void) {
-    if (EXTI_PR & (1U << 1)) {
-        EXTI_PR = (1U << 1);            // Clear pending flag EXTI1
+void GPIO_EXTI_Init(void) {
+    // nyalain clock GPIOA sama SYSCFG
+    RCC->AHB1ENR |= RCC_AHB1ENR_GPIOAEN;
+    RCC->APB2ENR |= RCC_APB2ENR_SYSCFGEN;
 
-        if ((GPIOA_IDR & (1U << 1)) == 0) {
-            // Tombol PA1 DITEKAN -> nyalakan timer kedip
-            TIM2_CNT  = 0;
-            TIM2_CR1 |= (1U << 0);
-        } else {
-            // Tombol PA1 DILEPAS -> matikan timer dan padamkan LED PA3
-            TIM2_CR1  &= ~(1U << 0);
-            GPIOA_ODR &= ~(1U << 3);
-        }
+    // set PA3 jadi output buat LED, kondisi awal mati
+    GPIOA->MODER &= ~(3U << (3 * 2));
+    GPIOA->MODER |=  (1U << (3 * 2));
+    GPIOA->ODR   &= ~(1U << 3);
+
+    // set PA1 jadi input pull-up buat button
+    GPIOA->MODER &= ~(3U << (1 * 2));
+    GPIOA->PUPDR &= ~(3U << (1 * 2));
+    GPIOA->PUPDR |=  (1U << (1 * 2));
+
+    // arahin EXTI1 ke PA1
+    SYSCFG->EXTICR[0] &= ~(0xFU << 4);
+
+    // aktifin interrupt pas falling edge (tombol ditekan ke GND)
+    EXTI->IMR  |= (1U << 1);
+    EXTI->FTSR |= (1U << 1);
+
+    NVIC_EnableIRQ(EXTI1_IRQn);
+}
+
+void TIM2_Debounce_Init(void) {
+    RCC->APB1ENR |= RCC_APB1ENR_TIM2EN;
+    TIM2->PSC   = 15999;                  // 1 ms per tick
+    TIM2->ARR   = 49;                     // delay debounce 50 ms
+    TIM2->DIER |= TIM_DIER_UIE;
+    NVIC_EnableIRQ(TIM2_IRQn);
+}
+
+void EXTI1_IRQHandler(void) {
+    if (EXTI->PR & (1U << 1)) {
+        EXTI->PR   = (1U << 1);           // hapus pending flag EXTI1
+        EXTI->IMR &= ~(1U << 1);          // matiin dulu EXTI1 biar bouncing-nya ke-skip
+        TIM2->CNT  = 0;                   // reset hitungan timer
+        TIM2->CR1 |= TIM_CR1_CEN;         // mulai hitung 50 ms
     }
 }
 
 void TIM2_IRQHandler(void) {
-    if (TIM2_SR & (1U << 0)) {
-        TIM2_SR = ~(1U << 0);           // Clear update flag TIM2
-        (void)TIM2_SR;
+    if (TIM2->SR & TIM_SR_UIF) {
+        TIM2->SR   = ~TIM_SR_UIF;         // clear flag TIM2
+        TIM2->CR1 &= ~TIM_CR1_CEN;        // stop timer (sekali jalan aja)
+        (void)TIM2->SR;
 
-        if ((GPIOA_IDR & (1U << 1)) == 0) {
-            GPIOA_ODR ^= (1U << 3);     // Toggle LED PA3 selama tombol ditahan
-        } else {
-            TIM2_CR1  &= ~(1U << 0);
-            GPIOA_ODR &= ~(1U << 3);
+        // cek lagi setelah 50 ms, beneran masih ditekan atau cuma noise
+        if ((GPIOA->IDR & (1U << 1)) == 0) {
+            btn_semaphore = 1;            // valid ditekan, naikin semaphore
         }
+
+        EXTI->PR   = (1U << 1);           // bersihin sisa flag selama bouncing
+        EXTI->IMR |= (1U << 1);           // nyalain lagi EXTI1
     }
 }
